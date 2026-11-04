@@ -86,3 +86,8 @@ The release build contains neither.
 - D2RLoader and its PluginSDK: plugin loading, patch transactions, config and log.
 - SGD2FreeRes for the idea of extending the tile cull past the bottom panel in the classic engine.
 - Blizzard Entertainment for Diablo II and Diablo II: Resurrected. This plugin contains no game files.
+
+## License
+
+MIT ([LICENSE](LICENSE)). Diablo II and Diablo II: Resurrected belong to Blizzard Entertainment; this project is not
+affiliated with or endorsed by Blizzard Entertainment or the D2RLoader project.
