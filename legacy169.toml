@@ -1,0 +1,7 @@
+# Legacy 16:9 (legacy169): classic graphics in 16:9. 800x600 shows as 1066x600, 640x480 as 853x480; the bottom
+# control panel stays 4:3 and centred. Changes apply at the next game start.
+[legacy169]
+# false: the plugin loads but patches nothing (the game keeps its 4:3 classic view)
+enabled = true
+# true: when D2R set up its classic screen before the plugin loaded, set it up again at once with the 16:9 sizes
+reset_screen = true
