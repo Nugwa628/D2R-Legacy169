@@ -1,7 +1,7 @@
 # D2R Legacy 16:9
 
 A D2RLoader plugin that shows the classic (legacy) graphics of Diablo II: Resurrected in 16:9 instead of 4:3.
-The bottom control panel stays 4:3 and centred. Work in progress.
+The bottom control panel stays 4:3 and centred.
 
 - 800x600 shows as 1066x600, 640x480 as 853x480 (16:9 at the same height). Only 16:9; a wider window keeps side bars.
 - Needs Diablo II: Resurrected 3.3 (build 93847) under D2RLoader 1.3.1. On any other game version the plugin loads,
@@ -10,16 +10,37 @@ The bottom control panel stays 4:3 and centred. Work in progress.
 
 ## Install
 
-Put `legacy169.dll` into `<game>\d2rloader\plugins\` (all mods) or `<game>\mods\<mod>\d2rloader\plugins\` (one mod).
-D2RLoader writes the default `legacy169.toml` into the matching `d2rloader\config\` folder on the first start:
+1. Install D2RLoader 1.3.1 and start the game through it once.
+2. Put `legacy169.dll` into `<game>\d2rloader\plugins\` (all mods, and plain D2R) or
+   `<game>\mods\<mod>\d2rloader\plugins\` (one mod).
+3. Start the game, then press G in game (or pick the legacy graphics in Options) and choose 800x600 or 640x480 under
+   Options > Video > Legacy Resolution as usual.
+
+To remove it, delete `legacy169.dll` (and `legacy169.toml` from the matching `d2rloader\config\` folder).
+
+## Settings
+
+D2RLoader writes the default `legacy169.toml` into the matching `d2rloader\config\` folder on the first start (the
+same file is in this repository). Changes apply at the next game start.
 
 ```toml
 [legacy169]
-enabled = true       # false: load but patch nothing
+enabled = true       # false: load but patch nothing (the game keeps its 4:3 classic view)
 reset_screen = true  # set the classic screen up again when D2R did it before the plugin loaded
 ```
 
-The plugin writes its own D2RLoader log (`legacy169.log`). The console command `legacy169` prints its status.
+The plugin writes its own D2RLoader log (`legacy169.log` in `d2rloader\logs\`). The console command `legacy169` prints
+its status; `legacy169 mode 0` / `legacy169 mode 1` switch the classic resolution (853x480 / 1066x600).
+
+## Known limits
+
+- Only Diablo II: Resurrected 3.3 build 93847 under D2RLoader 1.3.1. Any other version: the log says why and the game
+  is not changed. The same happens when another plugin already changed one of the patched bytes.
+- Only 16:9. A wider window keeps side bars; a narrower one (e.g. 4:3) cuts the sides of the 16:9 picture off.
+- Legacy graphics need a Classic or Expansion character; D2R does not offer them for "Reign of the Warlock" characters
+  (choose Expansion in the Game Version list when you create the hero).
+- The bottom control panel stays 800 (640) pixels wide by design; the world shows beside it.
+- Offline / single player only (D2RLoader).
 
 ## How it works
 
@@ -34,11 +55,11 @@ expects; all patches go in as one D2RLoader transaction or not at all.
 - Side panels sit at the window edges: the profile loader is hooked and the panel anchors of `_profileSD.json` are
   rewritten after D2R parses it (only the stock 0.5 values). At 1066x600 the 800x600 frame stays beside them (the
   BordersPanel draw is hooked and moves the right frame and its click catcher to the right edge).
-- With a panel open the view shifts by the stock 200 / 160 pixels instead of a quarter of the wider screen.
+- With a panel open the view shifts by the stock 200 / 160 pixels instead of a quarter of the wider screen. The automap
+  overlay uses the same shift (its centre helper and the two width calls of AutoMapPanel::Draw).
+- HUD widgets anchored to the screen centre (Help button, message log, NPC speech, menus) keep their 800x600 place
+  relative to the control panel.
 - The hooks check their entry bytes like the patches and are not installed on another build.
-
-Known gap: with a side panel open the automap overlay is off by about the extra width (its centre helper 0xb9a40 is not
-patched yet).
 
 ## Build
 
@@ -50,3 +71,18 @@ pwsh tools/build.ps1 -Sdk <PluginSDK folder> [-Image <D2R image dump>]
 
 Output: `build\Release\legacy169.dll`. The script also runs the unit tests (`build\tests\Release\legacy169_tests.exe`);
 with `-Image` they check every expected byte range against a dump of the game image.
+
+Test builds (never ship them; their version reads `0.1.0-test`):
+
+- `-Test` (output `build-test\`): adds a background-input harness so scripted checks can drive the game while it is not
+  the foreground window. It only runs when `legacy169-testharness.txt` sits next to the DLL.
+- `-BadBytes` (output `build-bad\`): the last patch expects a wrong byte, to check that the plugin refuses the whole
+  table, logs it and leaves the game unchanged.
+
+The release build contains neither.
+
+## Credits
+
+- D2RLoader and its PluginSDK: plugin loading, patch transactions, config and log.
+- SGD2FreeRes for the idea of extending the tile cull past the bottom panel in the classic engine.
+- Blizzard Entertainment for Diablo II and Diablo II: Resurrected. This plugin contains no game files.
