@@ -19,10 +19,17 @@
 
 #include "patch_table.h"
 #include "ui_layout.h"
+#ifdef LEGACY169_TEST_HARNESS
+#include "testharness.h"
+#endif
 
 namespace {
 
+#if defined(LEGACY169_TEST_HARNESS) || defined(LEGACY169_TEST_BAD_BYTES)
+constexpr const char* PluginVersion = "0.1.0-test";  // test build: not for release
+#else
 constexpr const char* PluginVersion = "0.1.0";
+#endif
 
 constexpr D2RL::PluginInfo Info{
     .infoSize = D2RL::PluginInfoSize,
@@ -91,11 +98,25 @@ auto ReadConfigText(char* out, uint32_t size) -> bool {
 	return g_context->ReadConfig(out, size, &need);
 }
 
+#ifdef LEGACY169_TEST_BAD_BYTES
+// Test build only: the last patch expects one byte the game does not have, as on another build or next to a plugin that
+// patched the same site. The whole table must be refused and the game left unchanged.
+auto BadTable() -> const legacy169::Patch* {
+	static legacy169::Patch table[legacy169::PatchCount];
+	std::memcpy(table, legacy169::Patches, sizeof(table));
+	table[legacy169::PatchCount - 1].expected[0] ^= 0xff;
+	return table;
+}
+const legacy169::Patch* const Table = BadTable();
+#else
+const legacy169::Patch* const Table = legacy169::Patches;
+#endif
+
 auto Apply() -> bool {
 	char line[512];
-	const legacy169::CheckResult check = legacy169::CheckAll(&ReadImage, const_cast<D2RL::PluginContext*>(g_context));
+	const legacy169::CheckResult check = legacy169::CheckAll(&ReadImage, const_cast<D2RL::PluginContext*>(g_context), Table);
 	if (!check.ok) {
-		const legacy169::Patch& p = legacy169::Patches[check.failed];
+		const legacy169::Patch& p = Table[check.failed];
 		char want[160], got[160];
 		legacy169::Hex(want, sizeof(want), p.expected, p.size);
 		legacy169::Hex(got, sizeof(got), check.found, p.size);
@@ -115,7 +136,8 @@ auto Apply() -> bool {
 		Fail("legacy169: could not start a patch transaction; nothing patched");
 		return false;
 	}
-	for (const legacy169::Patch& p : legacy169::Patches) {
+	for (size_t i = 0; i < legacy169::PatchCount; ++i) {
+		const legacy169::Patch& p = Table[i];
 		const D2RL::Mutations::BytePatchRequest request{
 		    .structSize = D2RL::Mutations::BytePatchRequestSize,
 		    .flags = 0,
@@ -302,6 +324,11 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 	              context->loadScope == D2RL::LoadScope::Mod ? "mod" : "global", context->activeMod ? context->activeMod : "-",
 	              context->buildVersion ? context->buildVersion : "?", stamp);
 	Log(line);
+#ifdef LEGACY169_TEST_HARNESS
+	char harness[256];
+	InstallTestHarness(harness, sizeof(harness));
+	context->LogWarn(harness);
+#endif
 	if (!legacy169::BuildMatches(stamp, context->buildName)) {
 		Fail("legacy169: needs Diablo II: Resurrected 3.3 (build 93847) under D2RLoader 1.3.1; this game is another version, nothing patched");
 		return true;

@@ -14,6 +14,17 @@ add_subdirectory(${LEGACY169_PLUGINSDK_DIR} PluginSDK EXCLUDE_FROM_ALL)
 
 add_library(legacy169 SHARED src/legacy169.cpp src/legacy169.rc)
 target_link_libraries(legacy169 PRIVATE D2RLPlugin::D2RLPlugin)
+# Test builds only: background input for unattended runs on plain D2R (src/testharness.cpp). Never on in a release build.
+option(LEGACY169_TEST_HARNESS "Compile in the test harness (test builds only)" OFF)
+if(LEGACY169_TEST_HARNESS)
+	target_sources(legacy169 PRIVATE src/testharness.cpp)
+	target_compile_definitions(legacy169 PRIVATE LEGACY169_TEST_HARNESS=1)
+endif()
+# Test builds only: one expected byte wrong, to check in the game that the plugin refuses everything and logs why.
+option(LEGACY169_TEST_BAD_BYTES "Break one expected byte (test builds only)" OFF)
+if(LEGACY169_TEST_BAD_BYTES)
+	target_compile_definitions(legacy169 PRIVATE LEGACY169_TEST_BAD_BYTES=1)
+endif()
 target_compile_features(legacy169 PRIVATE cxx_std_20)
 d2rlplugin_embed_config(TARGET legacy169 FILE "${CMAKE_CURRENT_SOURCE_DIR}/legacy169.toml")
 if(MSVC)
