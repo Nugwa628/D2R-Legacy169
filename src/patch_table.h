@@ -30,6 +30,19 @@ constexpr int ClassicWidth0 = 853;  // 480 * 16 / 9 = 853.3
 // Game globals the plugin reads for its log (written by 0x7f170 / 0x7e7b5).
 constexpr uint64_t RvaScreenSizeX = 0x22a0d68;
 constexpr uint64_t RvaScreenSizeY = 0x22a0d6c;
+constexpr uint64_t RvaViewSizeX = 0x22a0d70;  // view width, = screen width (the view height is screen height - 40)
+
+// The width a set-up screen gets: D2R sets its classic screen up before plugins load, so the patched setters have not run
+// yet. For the stock width of the current mode the 16:9 width, else 0 (leave the globals alone: not D2R's own value).
+constexpr int WidenedWidth(int mode, int screenX, int screenY, int viewX) {
+	if (mode == 1 && screenX == 800 && screenY == ClassicHeight1 && viewX == 800) {
+		return ClassicWidth1;
+	}
+	if (mode == 0 && screenX == 640 && screenY == ClassicHeight0 && viewX == 640) {
+		return ClassicWidth0;
+	}
+	return 0;
+}
 constexpr uint64_t RvaSetScreenResolution = 0x7f170;  // void (int mode); returns at once when mode is the current one
 constexpr uint64_t RvaGetResolutionMode = 0x901750;   // int (void)
 

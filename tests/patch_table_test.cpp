@@ -135,6 +135,12 @@ int main(int argc, char** argv) {
 		Check(std::strcmp(hex, "20 03 00 ab") == 0, "hex dump of found bytes");
 	}
 
+	// Width globals of a screen D2R set up before the plugin loaded.
+	Check(WidenedWidth(1, 800, 600, 800) == 1066 && WidenedWidth(0, 640, 480, 640) == 853, "stock sizes get the 16:9 width");
+	Check(WidenedWidth(1, 0, 0, 0) == 0, "not set up yet: left alone (the patched setter writes it)");
+	Check(WidenedWidth(1, 1066, 600, 1066) == 0 && WidenedWidth(0, 800, 600, 800) == 0, "already wide or mode mismatch: left alone");
+	Check(WidenedWidth(1, 800, 600, 1024) == 0 && WidenedWidth(2, 800, 600, 800) == 0, "foreign values or unknown mode: left alone");
+
 	// Build check.
 	Check(BuildMatches(0x6ab3782cU, "93847") && BuildMatches(0x6ab3782cU, nullptr) && BuildMatches(0x6ab3782cU, ""), "build 93847 matches");
 	Check(!BuildMatches(0x6ab3782dU, "93847") && !BuildMatches(0x6ab3782cU, "94100") && !BuildMatches(0x6ab3782cU, "9384"), "other builds refused");

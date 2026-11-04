@@ -158,12 +158,31 @@ void __cdecl ResetScreen(const D2RL::PluginContext*, void*) noexcept {
 	Log(line);
 }
 
+// `legacy169`: the status (console and log). `legacy169 mode 0|1`: switch the classic resolution mode with the game's own
+// setter (0 = 640x480 class, here 853x480; 1 = 800x600 class, here 1066x600), for checks of the other mode. Console
+// commands run on the UI thread.
 auto __cdecl StatusCommand(D2R::Game::Client*, const D2RL::ConsoleCommandContext* command, void*) noexcept -> D2RL::ConsoleCommandResult {
+	using SetFn = void(__fastcall*)(int);
+	using GetFn = int(__fastcall*)();
+	const auto get = reinterpret_cast<GetFn>(g_context->exeBase + legacy169::RvaGetResolutionMode);
+	const char* args = command->args != nullptr ? command->args : "";
+	while (*args == ' ') {
+		++args;
+	}
+	if (std::strncmp(args, "mode ", 5) == 0) {
+		const char m = args[5];
+		if ((m != '0' && m != '1') || args[6] != '\0') {
+			return D2RL::ConsoleCommandResult::InvalidArguments;
+		}
+		reinterpret_cast<SetFn>(g_context->exeBase + legacy169::RvaSetScreenResolution)(m - '0');
+	} else if (*args != '\0') {
+		return D2RL::ConsoleCommandResult::InvalidArguments;
+	}
 	char line[480];
 	std::snprintf(line, sizeof(line), "legacy169 %s: %s; classic screen %dx%d (mode %d), screen resets %ld", PluginVersion, g_status,
-	              Global(legacy169::RvaScreenSizeX), Global(legacy169::RvaScreenSizeY),
-	              reinterpret_cast<int(__fastcall*)()>(g_context->exeBase + legacy169::RvaGetResolutionMode)(), g_resets);
+	              Global(legacy169::RvaScreenSizeX), Global(legacy169::RvaScreenSizeY), get(), g_resets);
 	command->plugin->WriteConsoleMessage(line);
+	Log(line);
 	return D2RL::ConsoleCommandResult::Handled;
 }
 
@@ -200,7 +219,16 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		              legacy169::ClassicWidth1, legacy169::ClassicHeight1);
 		std::snprintf(line, sizeof(line), "legacy169: %s; classic screen at load %dx%d", g_status, w, h);
 		Log(line);
-		if (w != 0) {
+		// D2R set its classic screen up before plugins load (seen with D2RLoader 1.3.1: 800x600 at load, no thread service
+		// yet). The setters' code is patched now; the two width globals get the 16:9 width the setter would have written.
+		const int mode = reinterpret_cast<int(__fastcall*)()>(context->exeBase + legacy169::RvaGetResolutionMode)();
+		const int wide = legacy169::WidenedWidth(mode, w, h, Global(legacy169::RvaViewSizeX));
+		if (wide != 0) {
+			*reinterpret_cast<volatile int*>(context->exeBase + legacy169::RvaScreenSizeX) = wide;
+			*reinterpret_cast<volatile int*>(context->exeBase + legacy169::RvaViewSizeX) = wide;
+			std::snprintf(line, sizeof(line), "legacy169: classic screen widths set to %d (mode %d)", wide, mode);
+			Log(line);
+		} else if (w != 0) {
 			const D2RL::ThreadService* threads = nullptr;
 			if (!config.resetScreen) {
 				Log("legacy169: reset_screen = false: the new widths apply from the next resolution change");
