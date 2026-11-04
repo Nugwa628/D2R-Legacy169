@@ -3,6 +3,19 @@
 A D2RLoader plugin that shows the classic (legacy) graphics of Diablo II: Resurrected in 16:9 instead of 4:3.
 The bottom control panel stays 4:3 and centred.
 
+Blood Moor in the classic graphics at 800x600, same spot. Before (stock D2R, 4:3 with side bars):
+
+![Stock D2R classic graphics: 4:3 picture with black side bars](docs/before-4x3.png)
+
+After (legacy169, 1066x600):
+
+![With legacy169: the classic picture fills the 16:9 window](docs/after-16x9.png)
+
+Side panels sit at the window edges (inventory; character and inventory):
+
+![Inventory open at 1066x600](docs/inventory-16x9.png)
+![Character and inventory panels open at 1066x600](docs/panels-16x9.png)
+
 - 800x600 shows as 1066x600, 640x480 as 853x480 (16:9 at the same height). Only 16:9; a wider window keeps side bars.
 - Needs Diablo II: Resurrected 3.3 (build 93847) under D2RLoader 1.3.1. On any other game version the plugin loads,
   logs why and changes nothing. Works without a mod and next to other plugins that do not patch the same bytes.
