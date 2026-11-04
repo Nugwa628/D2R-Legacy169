@@ -74,13 +74,24 @@ bool LoadFile(const char* path, Image& img) {
 int main(int argc, char** argv) {
 	using namespace legacy169;
 
+	// --dump: every patch as "rva size expected bytes" (hex), for a disassembler.
+	if (argc > 1 && std::strcmp(argv[1], "--dump") == 0) {
+		for (const auto& p : Patches) {
+			char e[160], b[160];
+			Hex(e, sizeof(e), p.expected, p.size);
+			Hex(b, sizeof(b), p.bytes, p.size);
+			std::printf("%llx|%u|%s|%s|%s\n", static_cast<unsigned long long>(p.rva), p.size, e, b, p.name);
+		}
+		return 0;
+	}
+
 	// The table itself.
-	Check(PatchCount == 30, "30 patches: 10 mode-1 widths, 9 mode-0 widths, compose float and instruction, tile cull, 8 view shift");
+	Check(PatchCount == 36, "36 patches: 10 mode-1 widths, 9 mode-0 widths, compose float and instruction, tile cull, 8 view shift, 6 automap");
 	Check(CountWidth(800, 1066) == 10, "ten 800 -> 1066 immediates");
 	Check(CountWidth(640, 853) == 9, "nine 640 -> 853 immediates");
 	Check(NoOverlap(), "no two patches touch the same byte");
 	for (const auto& p : Patches) {
-		Check(p.size > 0 && p.size <= MaxPatchBytes, "patch size 1..12");
+		Check(p.size > 0 && p.size <= MaxPatchBytes, "patch size 1..48");
 		Check(std::memcmp(p.expected, p.bytes, p.size) != 0, "every patch changes something");
 	}
 	Check(ClassicWidth1 * 9 <= ClassicHeight1 * 16 && (ClassicWidth1 + 1) * 9 > ClassicHeight1 * 16, "1066 = floor(600 * 16 / 9)");
@@ -110,6 +121,31 @@ int main(int argc, char** argv) {
 	}
 	// Panel view shift: the stock 4:3 values at the 16:9 widths.
 	Check(PanelViewShift(ClassicWidth1) == 800 / 4 && PanelViewShift(ClassicWidth0) == 640 / 4, "view shift 200 / 160 at 1066 / 853");
+
+	// Automap: the width function in padding and the two calls that go to it.
+	{
+		const Patch fn = AutomapWidthFn();
+		Check(fn.size == AutomapWidthSize && fn.size <= MaxPatchBytes, "automap width function fits a patch");
+		for (size_t i = 0; i < fn.size; ++i) {
+			Check(fn.expected[i] == 0xcc, "automap width function expects int3 padding");
+		}
+		Check(RvaAutomapWidth + 9 + static_cast<int32_t>(Le32(fn.bytes + 5)) == RvaIsHd, "it calls the HD check");
+		Check(RvaAutomapWidth + 22 + static_cast<int32_t>(Le32(fn.bytes + 18)) == RvaWidthGetter, "HD: it jumps to the stock width getter");
+		Check(RvaAutomapWidth + 28 + static_cast<int32_t>(Le32(fn.bytes + 24)) == RvaScreenSizeX, "classic: it reads ScreenSizeX");
+		Check(fn.bytes[15] == 0x74 && fn.bytes[16] == 22 - 17 && fn.bytes[40] == 0xc3, "jz skips the HD jump; ends with ret");
+		for (uint64_t site : {RvaAutomapCall1, RvaAutomapCall2}) {
+			const Patch c = AutomapCall("c", site);
+			Check(site + 5 + static_cast<int32_t>(Le32(c.expected + 1)) == RvaWidthGetter, "old call goes to 0x7f510");
+			Check(site + 5 + static_cast<int32_t>(Le32(c.bytes + 1)) == RvaAutomapWidth, "new call goes to the automap width function");
+		}
+		// what the panel adds at 16:9: (4 * shift) / 4 = the stock shift
+		Check(PanelViewShift(ClassicWidth1) * 4 / 4 == 200 && PanelViewShift(ClassicWidth0) * 4 / 4 == 160, "automap screen point shift 200 / 160");
+		// 0xb9a40: w / 2 with a panel open is X - 3X / 8, halved: X / 2 - shift (within 1)
+		for (int w : {ClassicWidth1, ClassicWidth0}) {
+			const int half = (w - (w * 3 >> 3)) / 2;
+			Check(half - (w / 2 - PanelViewShift(w)) >= -1 && half - (w / 2 - PanelViewShift(w)) <= 1, "automap centre: X / 2 - shift");
+		}
+	}
 
 	// Panel anchors: one pair for both modes, truncated or rounded.
 	for (bool t : {true, false}) {

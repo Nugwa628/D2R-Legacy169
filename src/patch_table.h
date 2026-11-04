@@ -15,6 +15,10 @@
 //   - an open side panel shifts the view by a quarter of the width, 266 at 1066: the draw window (0xb9c20, ViewSizeX / 4)
 //     and the view offset helpers (0xb9ad0 and 0xb9b20, ScreenSizeX / 4; the world, units and the SD renderer use them).
 //     The panels keep their 4:3 width, so the shift is put back to the stock 200 / 160: (width * 3 + 15) >> 4.
+//   - the automap overlay follows the panel shift twice: its centre point in the world (0xb9a40, by ScreenSizeX / 2 and
+//     / 4) and the screen point it is drawn at (AutoMapPanel::Draw 0x14e3480, by the width getter 0x7f510 / 4). Both get
+//     the stock 4:3 relation back: 0xb9a40 in place, and the two width calls of the panel go to a small function in int3
+//     padding that returns 4 * the stock shift in classic mode and the HD width as before.
 // The side panels themselves move through two hooks (ui_layout.h).
 // All RVAs are for D2R 3.3 build 93847 under D2RLoader 1.3.1 (image stamp 0x6ab3782c).
 #pragma once
@@ -53,7 +57,7 @@ constexpr int WidenedWidth(int mode, int screenX, int screenY, int viewX) {
 constexpr uint64_t RvaSetScreenResolution = 0x7f170;  // void (int mode); returns at once when mode is the current one
 constexpr uint64_t RvaGetResolutionMode = 0x901750;   // int (void)
 
-constexpr size_t MaxPatchBytes = 12;
+constexpr size_t MaxPatchBytes = 48;  // the automap function in padding; the rest are up to 12
 
 struct Patch {
 	const char* name;
@@ -97,6 +101,66 @@ constexpr Patch ComposeMovss() {
 	return Patch{"compose aspect movss", RvaComposeMovss, 8,
 	             {0xf3, 0x0f, 0x10, 0x0d, static_cast<uint8_t>(from), static_cast<uint8_t>(from >> 8), static_cast<uint8_t>(from >> 16), static_cast<uint8_t>(from >> 24)},
 	             {0xf3, 0x0f, 0x10, 0x0d, static_cast<uint8_t>(to), static_cast<uint8_t>(to >> 8), static_cast<uint8_t>(to >> 16), static_cast<uint8_t>(to >> 24)}};
+}
+
+// Automap. 0xb9a40 returns the world point the automap centres: ViewOffsetX + w / 2 - q, where w = ScreenSizeX
+// (halved while a side panel is open) and q = +-ScreenSizeX / 4 by the panel state. Stock (4:3) the point is the player
+// for one panel state and 2 * shift left of it for the other; at 16:9 w / 2 must be ScreenSizeX / 2 - shift and q the shift:
+//   0xb9a5a `mov eax, r9d; cdq; sub eax, edx; sar eax, 1; mov r9d, eax` (r9 = ScreenSizeX / 2)
+//        -> `lea eax, [r9 + r9 * 2]; sar eax, 3; sub r9d, eax; nop` (r9 = X - 3X / 8 = 667 at 1066, 534 at 853)
+//   0xb9a79 / 0xb9a8a `cdq; and edx, 3; lea r10d, [rdx + rax]; sar r10d, 2` (eax = ScreenSizeX)
+//        -> `lea r10d, [rax + rax * 2]; add r10d, 15; sar r10d, 4` (the stock 200 / 160)
+// AutoMapPanel::Draw adds -+ width / 4 to the screen point (width = 0x7f510: the HD width in HD, else ScreenSizeX). Its two
+// `call 0x7f510` (0x14e36ce, 0x14e36de) call AutomapWidth in padding at 0xa16900 (0xa168e7..0xa16a2f is int3 after a jmp):
+//   sub rsp, 0x28; call 0x846210 (HD?); add rsp, 0x28; test al, al; jz classic; jmp 0x7f510 (HD: as before)
+//   classic: mov eax, [ScreenSizeX]; lea eax, [rax + rax * 2]; add eax, 15; sar eax, 4; shl eax, 2; ret   (4 * the shift)
+constexpr uint64_t RvaAutomapCentre = 0xb9a40;
+constexpr uint64_t RvaAutomapWidth = 0xa16900;
+constexpr uint64_t RvaWidthGetter = 0x7f510;
+constexpr uint64_t RvaIsHd = 0x846210;
+constexpr uint64_t RvaAutomapCall1 = 0x14e36ce;
+constexpr uint64_t RvaAutomapCall2 = 0x14e36de;
+constexpr size_t AutomapWidthSize = 41;
+
+constexpr void Put32(uint8_t* p, uint32_t v) {
+	p[0] = static_cast<uint8_t>(v);
+	p[1] = static_cast<uint8_t>(v >> 8);
+	p[2] = static_cast<uint8_t>(v >> 16);
+	p[3] = static_cast<uint8_t>(v >> 24);
+}
+
+constexpr Patch AutomapWidthFn() {
+	Patch p{"automap width (int3 padding)", RvaAutomapWidth, AutomapWidthSize, {}, {}};
+	const uint8_t code[AutomapWidthSize] = {
+	    0x48, 0x83, 0xec, 0x28,        // sub rsp, 0x28
+	    0xe8, 0, 0, 0, 0,              // +4 call IsHd
+	    0x48, 0x83, 0xc4, 0x28,        // +9 add rsp, 0x28
+	    0x84, 0xc0,                    // +13 test al, al
+	    0x74, 0x05,                    // +15 jz +22
+	    0xe9, 0, 0, 0, 0,              // +17 jmp 0x7f510
+	    0x8b, 0x05, 0, 0, 0, 0,        // +22 mov eax, [ScreenSizeX]
+	    0x8d, 0x04, 0x40,              // +28 lea eax, [rax + rax * 2]
+	    0x83, 0xc0, 0x0f,              // +31 add eax, 15
+	    0xc1, 0xf8, 0x04,              // +34 sar eax, 4
+	    0xc1, 0xe0, 0x02,              // +37 shl eax, 2
+	    0xc3,                          // +40 ret
+	};
+	for (size_t i = 0; i < AutomapWidthSize; ++i) {
+		p.expected[i] = 0xcc;
+		p.bytes[i] = code[i];
+	}
+	Put32(p.bytes + 5, Disp(RvaAutomapWidth + 9, RvaIsHd));
+	Put32(p.bytes + 18, Disp(RvaAutomapWidth + 22, RvaWidthGetter));
+	Put32(p.bytes + 24, Disp(RvaAutomapWidth + 28, RvaScreenSizeX));
+	return p;
+}
+
+// `call 0x7f510` at `site` -> `call AutomapWidth`.
+constexpr Patch AutomapCall(const char* name, uint64_t site) {
+	Patch p{name, site, 5, {0xe8}, {0xe8}};
+	Put32(p.expected + 1, Disp(site + 5, RvaWidthGetter));
+	Put32(p.bytes + 1, Disp(site + 5, RvaAutomapWidth));
+	return p;
 }
 
 // The table. Order does not matter for correctness (all of it goes in as one transaction, or none of it), but the float
@@ -143,6 +207,16 @@ constexpr Patch Patches[] = {
     Patch{"view shift 0xb9b20 a sar", 0xb9b4e, 3, {0xc1, 0xf9, 0x02}, {0xc1, 0xf9, 0x04}},
     Patch{"view shift 0xb9b20 b", 0xb9b5a, 7, {0x99, 0x83, 0xe2, 0x03, 0x8d, 0x0c, 0x02}, {0x8d, 0x0c, 0x40, 0x83, 0xc1, 0x0f, 0x90}},
     Patch{"view shift 0xb9b20 b sar", 0xb9b67, 3, {0xc1, 0xf9, 0x02}, {0xc1, 0xf9, 0x04}},
+    // automap centre point (0xb9a40) and the screen point it is drawn at (AutoMapPanel::Draw), see AutomapWidthFn
+    Patch{"automap centre 0xb9a40 half width", 0xb9a5a, 11, {0x41, 0x8b, 0xc1, 0x99, 0x2b, 0xc2, 0xd1, 0xf8, 0x44, 0x8b, 0xc8},
+          {0x43, 0x8d, 0x04, 0x49, 0xc1, 0xf8, 0x03, 0x44, 0x2b, 0xc8, 0x90}},
+    Patch{"automap centre 0xb9a40 shift a", 0xb9a79, 12, {0x99, 0x83, 0xe2, 0x03, 0x44, 0x8d, 0x14, 0x02, 0x41, 0xc1, 0xfa, 0x02},
+          {0x44, 0x8d, 0x14, 0x40, 0x41, 0x83, 0xc2, 0x0f, 0x41, 0xc1, 0xfa, 0x04}},
+    Patch{"automap centre 0xb9a40 shift b", 0xb9a8a, 12, {0x99, 0x83, 0xe2, 0x03, 0x44, 0x8d, 0x14, 0x02, 0x41, 0xc1, 0xfa, 0x02},
+          {0x44, 0x8d, 0x14, 0x40, 0x41, 0x83, 0xc2, 0x0f, 0x41, 0xc1, 0xfa, 0x04}},
+    AutomapWidthFn(),
+    AutomapCall("AutoMapPanel::Draw width call a", RvaAutomapCall1),
+    AutomapCall("AutoMapPanel::Draw width call b", RvaAutomapCall2),
 };
 constexpr size_t PatchCount = sizeof(Patches) / sizeof(Patches[0]);
 
@@ -175,7 +249,7 @@ using ReadFn = bool (*)(void* user, uint64_t rva, uint8_t* out, size_t size);
 struct CheckResult {
 	bool ok;
 	size_t failed;  // index into the table of the first mismatch (its count when ok)
-	uint8_t found[MaxHookBytes];
+	uint8_t found[MaxPatchBytes > MaxHookBytes ? MaxPatchBytes : MaxHookBytes];
 	bool unreadable;
 };
 
@@ -184,7 +258,7 @@ template <typename Site>
 inline CheckResult CheckSites(ReadFn read, void* user, const Site* table, size_t count) {
 	CheckResult r{true, count, {}, false};
 	for (size_t i = 0; i < count; ++i) {
-		uint8_t buf[MaxHookBytes] = {};
+		uint8_t buf[MaxPatchBytes > MaxHookBytes ? MaxPatchBytes : MaxHookBytes] = {};
 		if (!read(user, table[i].rva, buf, table[i].size)) {
 			r = CheckResult{false, i, {}, true};
 			return r;

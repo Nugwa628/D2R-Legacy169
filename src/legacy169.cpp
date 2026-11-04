@@ -92,11 +92,11 @@ auto ReadConfigText(char* out, uint32_t size) -> bool {
 }
 
 auto Apply() -> bool {
-	char line[256];
+	char line[512];
 	const legacy169::CheckResult check = legacy169::CheckAll(&ReadImage, const_cast<D2RL::PluginContext*>(g_context));
 	if (!check.ok) {
 		const legacy169::Patch& p = legacy169::Patches[check.failed];
-		char want[48], got[48];
+		char want[160], got[160];
 		legacy169::Hex(want, sizeof(want), p.expected, p.size);
 		legacy169::Hex(got, sizeof(got), check.found, p.size);
 		std::snprintf(line, sizeof(line), "legacy169: %s at 0x%llx: expected %s, found %s; nothing patched, the game is unchanged",
