@@ -3,7 +3,9 @@
 // 800x600 becomes 1066x600 and 640x480 becomes 853x480; the bottom control panel stays 4:3 and centred (patch_table.h has
 // the sites). The plugin only patches bytes: every patch is checked against the bytes it expects first, and all of them go
 // in through one D2RLoader transaction, so on any other game image, or with bytes another plugin changed, nothing changes.
-// Mouse mapping, culling and the cursor read the screen-size globals and follow the new width by themselves.
+// Mouse mapping, culling and the cursor read the screen-size globals and follow the new width by themselves. Two hooks move
+// the side panels to the window edges (ui_layout.h): the profile loader rewrites the panel anchors of _profileSD.json, and
+// the 800x600 panel frame draws its right half at the right edge.
 //
 // Config: <scope>\d2rloader\config\legacy169.toml (D2RLoader writes the embedded default when it is missing). Log: the
 // plugin's own D2RLoader log. Console command: `legacy169` prints the status.
@@ -16,6 +18,7 @@
 #include <cstring>
 
 #include "patch_table.h"
+#include "ui_layout.h"
 
 namespace {
 
@@ -29,12 +32,20 @@ constexpr D2RL::PluginInfo Info{
     .version = PluginVersion,
     .author = "Nugwa628",
     .description = "Legacy (classic) graphics in 16:9: 1066x600 and 853x480; the control panel stays 4:3.",
-    .flags = D2RL::PluginFlags::Client,
+    .flags = D2RL::PluginFlags::Client | D2RL::PluginFlags::NativeHooks,
 };
 
 const D2RL::PluginContext* g_context = nullptr;
 char g_status[320] = "not loaded";
 volatile LONG g_resets = 0;
+char g_ui[160] = "panels: not moved";
+volatile LONG g_profilePatches = 0;  // anchors rewritten (both of them count 2)
+int g_catcherShift = 0;               // right click catcher x this plugin set last (UI thread)
+
+using ProfileLoadFn = void(__fastcall*)(const char* path, int id);
+using BordersDrawFn = void(__fastcall*)(uint8_t* panel, void* a2, void* a3, void* a4);
+ProfileLoadFn g_profileLoad = nullptr;
+BordersDrawFn g_bordersDraw = nullptr;
 
 void Log(const char* line) {
 	g_context->LogInfo(line);
@@ -85,7 +96,7 @@ auto Apply() -> bool {
 	const legacy169::CheckResult check = legacy169::CheckAll(&ReadImage, const_cast<D2RL::PluginContext*>(g_context));
 	if (!check.ok) {
 		const legacy169::Patch& p = legacy169::Patches[check.failed];
-		char want[32], got[32];
+		char want[48], got[48];
 		legacy169::Hex(want, sizeof(want), p.expected, p.size);
 		legacy169::Hex(got, sizeof(got), check.found, p.size);
 		std::snprintf(line, sizeof(line), "legacy169: %s at 0x%llx: expected %s, found %s; nothing patched, the game is unchanged",
@@ -138,6 +149,94 @@ auto Apply() -> bool {
 	return true;
 }
 
+// Rewrites the panel anchors of the loaded _profileSD.json. Game memory: a fault (another build's layout slipped past the
+// checks) is caught and reported instead of crashing the game.
+auto PatchProfile(legacy169::AnchorResult* out) -> bool {
+	__try {
+		auto* maps = *reinterpret_cast<legacy169::ProfileMap* const*>(g_context->exeBase + legacy169::RvaProfileMaps);
+		*out = legacy169::PatchPanelAnchors(maps, legacy169::ProfileSd);
+		return true;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return false;
+	}
+}
+
+void LogProfile(const char* when) {
+	legacy169::AnchorResult r{};
+	char line[256];
+	if (!PatchProfile(&r)) {
+		std::snprintf(line, sizeof(line), "legacy169: %s: the profile map could not be read; panels stay centred", when);
+		g_context->LogWarn(line);
+		return;
+	}
+	InterlockedExchangeAdd(&g_profilePatches, r.changed);
+	if (r.changed + r.already == 2) {
+		std::snprintf(g_ui, sizeof(g_ui), "panels at the edges (anchor x %.4g / %.4g)", legacy169::LeftAnchorX, legacy169::RightAnchorX);
+	}
+	std::snprintf(line, sizeof(line), "legacy169: %s: panel anchors left %.4g, right %.4g; %d rewritten, %d already set", when, r.oldLeft,
+	              r.oldRight, r.changed, r.already);
+	Log(line);
+}
+
+void __fastcall ProfileLoadHook(const char* path, int id) {
+	g_profileLoad(path, id);
+	if (id == legacy169::ProfileSd) {
+		LogProfile("_profileSD.json loaded");
+	}
+}
+
+// Mode 1 only (the frame is an 800x600 thing): the right pieces are drawn ScreenSizeX - 800 further right, for this draw
+// only; the right click catcher stays moved (it is hit-tested outside Draw).
+void __fastcall BordersDrawHook(uint8_t* panel, void* a2, void* a3, void* a4) {
+	const int mode = reinterpret_cast<int(__fastcall*)()>(g_context->exeBase + legacy169::RvaGetResolutionMode)();
+	const int dx = mode == 1 && Global(legacy169::RvaScreenSizeX) > 800 ? Global(legacy169::RvaScreenSizeX) - 800 : 0;
+	if (panel == nullptr || dx == 0) {
+		g_bordersDraw(panel, a2, a3, a4);
+		return;
+	}
+	if (legacy169::PlaceRightCatcher(panel, dx, g_catcherShift)) {
+		g_catcherShift = dx;
+	}
+	const bool shifted = legacy169::ShiftBordersRight(panel, dx);
+	g_bordersDraw(panel, a2, a3, a4);
+	if (shifted) {
+		legacy169::ShiftBordersRight(panel, -dx);
+	}
+}
+
+void __cdecl ProfileNow(const D2RL::PluginContext*, void*) noexcept {
+	LogProfile("at load");
+}
+
+auto InstallHooks() -> bool {
+	char line[256];
+	const legacy169::CheckResult check = legacy169::CheckHooks(&ReadImage, const_cast<D2RL::PluginContext*>(g_context));
+	if (!check.ok) {
+		const legacy169::HookSite& h = legacy169::Hooks[check.failed];
+		char want[80], got[80];
+		legacy169::Hex(want, sizeof(want), h.expected, h.size);
+		legacy169::Hex(got, sizeof(got), check.found, h.size);
+		std::snprintf(line, sizeof(line), "legacy169: %s: expected %s, found %s; panels not moved", h.name, want, check.unreadable ? "(unreadable)" : got);
+		g_context->LogWarn(line);
+		std::snprintf(g_ui, sizeof(g_ui), "panels: not moved (%s changed)", h.name);
+		return false;
+	}
+	const legacy169::HookSite& profile = legacy169::Hooks[0];
+	const legacy169::HookSite& borders = legacy169::Hooks[1];
+	if (!g_context->InstallInlineHook(profile.rva, profile.expected, profile.size, reinterpret_cast<void*>(&ProfileLoadHook),
+	                                  reinterpret_cast<void**>(&g_profileLoad))) {
+		g_context->LogWarn("legacy169: the profile load hook was refused; panels not moved");
+		std::snprintf(g_ui, sizeof(g_ui), "panels: not moved (profile hook refused)");
+		return false;
+	}
+	if (!g_context->InstallInlineHook(borders.rva, borders.expected, borders.size, reinterpret_cast<void*>(&BordersDrawHook),
+	                                  reinterpret_cast<void**>(&g_bordersDraw))) {
+		g_context->LogWarn("legacy169: the BordersPanel::Draw hook was refused; the 800x600 panel frame stays at 0..800");
+	}
+	std::snprintf(g_ui, sizeof(g_ui), "panels: hooks in, profile not loaded yet");
+	return true;
+}
+
 // D2R set up its classic screen before the plugin loaded: SetScreenResolution returns at once for the current mode, so
 // switch to the other mode and back; both now use the 16:9 widths. Runs on the UI thread (as the Options menu does).
 void __cdecl ResetScreen(const D2RL::PluginContext*, void*) noexcept {
@@ -178,9 +277,9 @@ auto __cdecl StatusCommand(D2R::Game::Client*, const D2RL::ConsoleCommandContext
 	} else if (*args != '\0') {
 		return D2RL::ConsoleCommandResult::InvalidArguments;
 	}
-	char line[480];
-	std::snprintf(line, sizeof(line), "legacy169 %s: %s; classic screen %dx%d (mode %d), screen resets %ld", PluginVersion, g_status,
-	              Global(legacy169::RvaScreenSizeX), Global(legacy169::RvaScreenSizeY), get(), g_resets);
+	char line[640];
+	std::snprintf(line, sizeof(line), "legacy169 %s: %s; classic screen %dx%d (mode %d), screen resets %ld; %s, catcher x %d", PluginVersion,
+	              g_status, Global(legacy169::RvaScreenSizeX), Global(legacy169::RvaScreenSizeY), get(), g_resets, g_ui, g_catcherShift);
 	command->plugin->WriteConsoleMessage(line);
 	Log(line);
 	return D2RL::ConsoleCommandResult::Handled;
@@ -219,6 +318,17 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		              legacy169::ClassicWidth1, legacy169::ClassicHeight1);
 		std::snprintf(line, sizeof(line), "legacy169: %s; classic screen at load %dx%d", g_status, w, h);
 		Log(line);
+		const D2RL::ThreadService* uiThreads = nullptr;
+		if (InstallHooks()) {
+			// the profile may have been read before the plugin loaded: rewrite it now (on the UI thread, which reads it)
+			if (context->QueryService(&uiThreads) == D2RL::ServiceQueryResult::Success &&
+			    D2RL::HasThreadServiceField(uiThreads, D2RL::ThreadServiceRequiredSize) && uiThreads->runOnUiThread != nullptr &&
+			    uiThreads->runOnUiThread(context, &ProfileNow, nullptr) == D2RL::Threads::Result::Success) {
+				Log("legacy169: hooks in; the loaded profile is checked on the UI thread");
+			} else {
+				Log("legacy169: hooks in; no UI thread service, the profile is patched when D2R loads it");
+			}
+		}
 		// D2R set its classic screen up before plugins load (seen with D2RLoader 1.3.1: 800x600 at load, no thread service
 		// yet). The setters' code is patched now; the two width globals get the 16:9 width the setter would have written.
 		const int mode = reinterpret_cast<int(__fastcall*)()>(context->exeBase + legacy169::RvaGetResolutionMode)();

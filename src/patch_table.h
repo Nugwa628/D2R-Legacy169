@@ -9,6 +9,13 @@
 //   - the compose pass (0xedde70) divides by a 4:3 float at 0x1d65290 that other code shares, so its movss is pointed at
 //     a plugin-owned float (1066/600) written into int3 padding after a function in .text.
 // The bottom control panel keeps its own 800 / 640 (its widget, 0x14c9430, is not patched), so it stays 4:3 and centred.
+// Around the wider screen:
+//   - the tile cull rectangle (SetViewRectangleSize 0xf3c00) ends at ScreenSizeY - 47, which the 800-wide control panel
+//     hid; at 1066 the bottom tile row was missing left and right of it. It now ends at ScreenSizeY + 40 (as SGD2FreeRes);
+//   - an open side panel shifts the view by a quarter of the width, 266 at 1066: the draw window (0xb9c20, ViewSizeX / 4)
+//     and the view offset helpers (0xb9ad0 and 0xb9b20, ScreenSizeX / 4; the world, units and the SD renderer use them).
+//     The panels keep their 4:3 width, so the shift is put back to the stock 200 / 160: (width * 3 + 15) >> 4.
+// The side panels themselves move through two hooks (ui_layout.h).
 // All RVAs are for D2R 3.3 build 93847 under D2RLoader 1.3.1 (image stamp 0x6ab3782c).
 #pragma once
 
@@ -46,7 +53,7 @@ constexpr int WidenedWidth(int mode, int screenX, int screenY, int viewX) {
 constexpr uint64_t RvaSetScreenResolution = 0x7f170;  // void (int mode); returns at once when mode is the current one
 constexpr uint64_t RvaGetResolutionMode = 0x901750;   // int (void)
 
-constexpr size_t MaxPatchBytes = 8;
+constexpr size_t MaxPatchBytes = 12;
 
 struct Patch {
 	const char* name;
@@ -119,24 +126,65 @@ constexpr Patch Patches[] = {
     // compose: the float, then the instruction that reads it
     Imm32("compose aspect float (int3 padding)", RvaAspectCave, 0xccccccccU, AspectBits),
     ComposeMovss(),
+    // tile cull bottom: `sub ecx, [ScreenBottomMargin 0x22a0d78]` -> `add ecx, 40; nop3` (ecx = ScreenSizeY at 0xf3c24)
+    Patch{"tile cull bottom (0xf3c00)", 0xf3c30, 6, {0x2b, 0x0d, 0x42, 0xd1, 0x1a, 0x02}, {0x83, 0xc1, 0x28, 0x0f, 0x1f, 0x00}},
+    // panel view shift (r9d = ViewSizeX): `mov eax, r9d; cdq` -> `lea r10d, [r9 + r9 * 2]`, the store of the panel state
+    // at 0xb9c2f stays, then `and edx, 3; lea r10d, [rdx + rax]; sar r10d, 2` -> `add r10d, 15; sar r10d, 4; nop3`
+    Patch{"panel view shift (0xb9c20) a", 0xb9c2b, 4, {0x41, 0x8b, 0xc1, 0x99}, {0x47, 0x8d, 0x14, 0x49}},
+    Patch{"panel view shift (0xb9c20) b", 0xb9c35, 11, {0x83, 0xe2, 0x03, 0x44, 0x8d, 0x14, 0x02, 0x41, 0xc1, 0xfa, 0x02},
+          {0x41, 0x83, 0xc2, 0x0f, 0x41, 0xc1, 0xfa, 0x04, 0x0f, 0x1f, 0x00}},
+    // view offset helpers, eax = ScreenSizeX: `cdq; and edx, 3; add eax, edx; sar eax, 2` -> `lea eax, [rax + rax * 2];
+    // add eax, 15; sar eax, 4` (0xb9ad0: +-shift by panel state, two branches)
+    Patch{"view shift 0xb9ad0 a", 0xb9ae9, 9, {0x99, 0x83, 0xe2, 0x03, 0x03, 0xc2, 0xc1, 0xf8, 0x02}, {0x8d, 0x04, 0x40, 0x83, 0xc0, 0x0f, 0xc1, 0xf8, 0x04}},
+    Patch{"view shift 0xb9ad0 b", 0xb9af9, 9, {0x99, 0x83, 0xe2, 0x03, 0x03, 0xc2, 0xc1, 0xf8, 0x02}, {0x8d, 0x04, 0x40, 0x83, 0xc0, 0x0f, 0xc1, 0xf8, 0x04}},
+    // 0xb9b20 (view offset X = base -+ shift), two branches: `cdq; and edx, 3; lea ecx, [rdx + rax]` -> `lea ecx, [rax + rax * 2];
+    // add ecx, 15; nop`, the base load after it stays, then `sar ecx, 2` -> `sar ecx, 4`
+    Patch{"view shift 0xb9b20 a", 0xb9b41, 7, {0x99, 0x83, 0xe2, 0x03, 0x8d, 0x0c, 0x02}, {0x8d, 0x0c, 0x40, 0x83, 0xc1, 0x0f, 0x90}},
+    Patch{"view shift 0xb9b20 a sar", 0xb9b4e, 3, {0xc1, 0xf9, 0x02}, {0xc1, 0xf9, 0x04}},
+    Patch{"view shift 0xb9b20 b", 0xb9b5a, 7, {0x99, 0x83, 0xe2, 0x03, 0x8d, 0x0c, 0x02}, {0x8d, 0x0c, 0x40, 0x83, 0xc1, 0x0f, 0x90}},
+    Patch{"view shift 0xb9b20 b sar", 0xb9b67, 3, {0xc1, 0xf9, 0x02}, {0xc1, 0xf9, 0x04}},
 };
 constexpr size_t PatchCount = sizeof(Patches) / sizeof(Patches[0]);
+
+// The panel view shift of a wide width: the stock ViewSizeX / 4 of the 4:3 width at the same height.
+constexpr int PanelViewShift(int viewX) {
+	return (viewX * 3 + 15) >> 4;
+}
+
+// Functions the plugin hooks (D2RLoader inline hooks, each with its own expected entry bytes). They go in after the
+// patches; ui_layout.h has what they do.
+constexpr size_t MaxHookBytes = 24;
+struct HookSite {
+	const char* name;
+	uint64_t rva;
+	uint8_t size;
+	uint8_t expected[MaxHookBytes];
+};
+constexpr uint64_t RvaProfileLoad = 0x8c80d0;  // void (const char* path, int profileId): reads one _profile*.json
+constexpr uint64_t RvaBordersDraw = 0x2adb20;  // void BordersPanel::Draw(BordersPanel*): the 800x600 frame beside panels
+constexpr HookSite Hooks[] = {
+    {"profile load (0x8c80d0)", RvaProfileLoad, 14, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x55, 0x41, 0x56, 0x48, 0x8d, 0x6c, 0x24, 0xd1}},
+    {"BordersPanel::Draw (0x2adb20)", RvaBordersDraw, 20,
+     {0x4c, 0x8b, 0xdc, 0x55, 0x53, 0x56, 0x57, 0x41, 0x55, 0x49, 0x8d, 0x6b, 0xa1, 0x48, 0x81, 0xec, 0x00, 0x01, 0x00, 0x00}},
+};
+constexpr size_t HookCount = sizeof(Hooks) / sizeof(Hooks[0]);
 
 // Read-only view of the game image for the check: returns false when the range cannot be read.
 using ReadFn = bool (*)(void* user, uint64_t rva, uint8_t* out, size_t size);
 
 struct CheckResult {
 	bool ok;
-	size_t failed;  // index into Patches of the first mismatch (PatchCount when ok)
-	uint8_t found[MaxPatchBytes];
+	size_t failed;  // index into the table of the first mismatch (its count when ok)
+	uint8_t found[MaxHookBytes];
 	bool unreadable;
 };
 
-// Every patch's expected bytes, before anything is written. The first mismatch stops the check.
-inline CheckResult CheckAll(ReadFn read, void* user, const Patch* table = Patches, size_t count = PatchCount) {
+// Every entry's expected bytes (Patches or Hooks), before anything is written. The first mismatch stops the check.
+template <typename Site>
+inline CheckResult CheckSites(ReadFn read, void* user, const Site* table, size_t count) {
 	CheckResult r{true, count, {}, false};
 	for (size_t i = 0; i < count; ++i) {
-		uint8_t buf[MaxPatchBytes] = {};
+		uint8_t buf[MaxHookBytes] = {};
 		if (!read(user, table[i].rva, buf, table[i].size)) {
 			r = CheckResult{false, i, {}, true};
 			return r;
@@ -149,6 +197,12 @@ inline CheckResult CheckAll(ReadFn read, void* user, const Patch* table = Patche
 		}
 	}
 	return r;
+}
+inline CheckResult CheckAll(ReadFn read, void* user, const Patch* table = Patches, size_t count = PatchCount) {
+	return CheckSites(read, user, table, count);
+}
+inline CheckResult CheckHooks(ReadFn read, void* user, const HookSite* table = Hooks, size_t count = HookCount) {
+	return CheckSites(read, user, table, count);
 }
 
 // No two patches may touch the same byte (D2RLoader refuses overlapping operations in one transaction too).
