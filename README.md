@@ -16,7 +16,8 @@ Side panels sit at the window edges (inventory; character and inventory):
 ![Inventory open at 1066x600](docs/inventory-16x9.png)
 ![Character and inventory panels open at 1066x600](docs/panels-16x9.png)
 
-- 800x600 shows as 1066x600, 640x480 as 853x480 (16:9 at the same height). Only 16:9; a wider window keeps side bars.
+- 800x600 shows as 1066x600, 640x480 as 853x480 (16:9 at the same height). The width follows the screen: a 16:10
+  screen gets 960x600 and 768x480, so nothing at the edges is cut off. Wider than 16:9 stays at 16:9 with side bars.
 - Needs Diablo II: Resurrected 3.3 (build 93847) under D2RLoader 1.3.1. On any other game version the plugin loads,
   logs why and changes nothing. Works without a mod and next to other plugins that do not patch the same bytes.
 - Offline / single player (D2RLoader).
@@ -40,16 +41,25 @@ same file is in this repository). Changes apply at the next game start.
 [legacy169]
 enabled = true       # false: load but patch nothing (the game keeps its 4:3 classic view)
 reset_screen = true  # set the classic screen up again when D2R did it before the plugin loaded
+aspect = "auto"      # the screen shape the classic picture is widened to: "auto", "16:10", "1920x1200", ...
 ```
 
+`aspect = "auto"` takes the shape of the monitor the game window is on (the primary monitor while there is no window
+yet). A game in a window of another shape than its monitor should name the window's shape, e.g. `aspect = "16:10"`
+for a 1600x1000 window. The value is clamped to 4:3 .. 16:9; at 4:3 the plugin changes nothing.
+
 The plugin writes its own D2RLoader log (`legacy169.log` in `d2rloader\logs\`). The console command `legacy169` prints
-its status; `legacy169 mode 0` / `legacy169 mode 1` switch the classic resolution (853x480 / 1066x600).
+its status; `legacy169 mode 0` / `legacy169 mode 1` switch the classic resolution (853x480 / 1066x600 at 16:9).
 
 ## Known limits
 
 - Only Diablo II: Resurrected 3.3 build 93847 under D2RLoader 1.3.1. Any other version: the log says why and the game
   is not changed. The same happens when another plugin already changed one of the patched bytes.
-- Only 16:9. A wider window keeps side bars; a narrower one (e.g. 4:3) cuts the sides of the 16:9 picture off.
+- At most 16:9; a wider window keeps side bars. The width is chosen at game start: after moving the game to a monitor
+  of another shape, restart it. D2R fits the picture to the window height, so an `aspect` wider than the window cuts
+  its sides off (portraits on the left, the clock and area name on the right).
+- Some shapes between 16:10 and 16:9 get a width a few pixels narrower than the screen (the panel shift must stay
+  exact at both classic widths); the rest is a thin side bar.
 - Legacy graphics need a Classic or Expansion character; D2R does not offer them for "Reign of the Warlock" characters
   (choose Expansion in the Game Version list when you create the hero).
 - The bottom control panel stays 800 (640) pixels wide by design; the world shows beside it.
@@ -59,14 +69,15 @@ its status; `legacy169 mode 0` / `legacy169 mode 1` switch the classic resolutio
 
 D2R renders the classic engine into a fixed SD target (640x480 or 800x600) and composes it into the window with a 4:3
 fit. The plugin changes the width immediates of the two screen-size setters and of the SD renderer's size switches, and
-points the compose pass's 4:3 constant at its own 1066/600 float. Mouse mapping, culling and the cursor read the
+points the compose pass's 4:3 constant at its own width/600 float (1066/600 at 16:9, 960/600 at 16:10). Mouse mapping, culling and the cursor read the
 screen-size globals, so they follow. Every site is listed in [src/patch_table.h](src/patch_table.h) with the bytes it
 expects; all patches go in as one D2RLoader transaction or not at all.
 
 - The tile cull reaches past the bottom panel (as SGD2FreeRes does), so the bottom corners beside the 4:3 panel show
   the world instead of black wedges.
 - Side panels sit at the window edges: the profile loader is hooked and the panel anchors of `_profileSD.json` are
-  rewritten after D2R parses it (only the stock 0.5 values). At 1066x600 the 800x600 frame stays beside them (the
+  rewritten after D2R parses it (only the stock 0.5 values; the anchors are computed for the chosen width). At the
+  wide width the 800x600 frame stays beside them (the
   BordersPanel draw is hooked and moves the right frame and its click catcher to the right edge).
 - With a panel open the view shifts by the stock 200 / 160 pixels instead of a quarter of the wider screen. The automap
   overlay uses the same shift (its centre helper and the two width calls of AutoMapPanel::Draw).

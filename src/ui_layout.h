@@ -4,10 +4,12 @@
 // D2R's classic panels are widgets placed at parentWidth * anchor.x + rect.x. Their anchors come from _profileSD.json
 // (`"LeftPanelAnchor": { "x": 0.5, ... }`, `"RightPanelAnchor"`), their rects are -320 (left) and 0 (right), so on a wider
 // screen they stay in the middle. A plugin cannot ship that file (it is not a mod), so the profile loader (0x8c80d0) is
-// hooked and the two x values are rewritten in the parsed profile before any panel layout reads them:
+// hooked and the two x values are rewritten in the parsed profile before any panel layout reads them. The pair comes from
+// the layout (patch_table.h FindAnchor); at 16:9:
 //   left 0.3755: 1066 * 0.3755 - 320 = 80 (as at 800x600, beside the 80-pixel frame), 853 * 0.3755 - 320 = 0;
 //   right 0.625: 1066 * 0.625 = 666 (666..986, then the frame), 853 * 0.625 = 533 (533..853).
-// One pair fits both modes, whether D2R truncates or rounds the float position.
+// At 16:10 0.4169 / 0.5836 (80 and 560 in 960, 0 and 448 in 768). One pair fits both modes, whether D2R truncates or
+// rounds the float position.
 //
 // In mode 1 the BordersPanel draws the 800x600 frame beside open panels at fixed 800-wide positions (panelborderspanel.json:
 // right pieces at x 400..800 and a click catcher widget over them). Its Draw (0x2adb20) is hooked: the right pieces are
@@ -27,19 +29,12 @@
 #include <cstdint>
 #include <cstring>
 
+#include "patch_table.h"
+
 namespace legacy169 {
 
 constexpr uint64_t RvaProfileMaps = 0x34412d8;
 constexpr int ProfileSd = 1;
-constexpr double LeftAnchorX = 0.3755;
-constexpr double RightAnchorX = 0.625;
-constexpr double StockAnchorX = 0.5;
-
-// Where a panel lands: D2R computes the position in float; t = truncate, else round to nearest.
-constexpr int PanelX(double anchor, int parentWidth, int rectX, bool truncate) {
-	const float x = static_cast<float>(anchor) * static_cast<float>(parentWidth) + static_cast<float>(rectX);
-	return truncate ? static_cast<int>(x) : static_cast<int>(x + 0.5f);
-}
 
 // rapidjson value flags (rapidjson/document.h)
 constexpr uint16_t JsonObject = 3;
@@ -166,7 +161,7 @@ struct AnchorResult {
 
 // Rewrites the x of $LeftPanelAnchor / $RightPanelAnchor in profile map `id` of the map array. Only the stock 0.5 is
 // changed (another value is a profile someone edited on purpose: left alone).
-inline AnchorResult PatchPanelAnchors(ProfileMap* maps, int id) {
+inline AnchorResult PatchPanelAnchors(ProfileMap* maps, int id, double left = LeftAnchorX, double right = RightAnchorX) {
 	AnchorResult r{0, 0, -1.0, -1.0};
 	if (maps == nullptr) {
 		return r;
@@ -175,7 +170,7 @@ inline AnchorResult PatchPanelAnchors(ProfileMap* maps, int id) {
 		const char* key;
 		double to;
 		double* old;
-	} anchors[] = {{"$LeftPanelAnchor", LeftAnchorX, &r.oldLeft}, {"$RightPanelAnchor", RightAnchorX, &r.oldRight}};
+	} anchors[] = {{"$LeftPanelAnchor", left, &r.oldLeft}, {"$RightPanelAnchor", right, &r.oldRight}};
 	for (const auto& a : anchors) {
 		uint8_t* v = JsonNumberMember(FindProfileValue(&maps[id], a.key), "x");
 		if (v == nullptr) {

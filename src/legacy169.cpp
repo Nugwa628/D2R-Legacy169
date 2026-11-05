@@ -1,7 +1,10 @@
-// legacy169: a D2RLoader plugin that shows D2R's legacy (classic 2D) graphics in 16:9 instead of 4:3.
+// legacy169: a D2RLoader plugin that shows D2R's legacy (classic 2D) graphics as wide as the screen (up to 16:9) instead
+// of 4:3.
 //
-// 800x600 becomes 1066x600 and 640x480 becomes 853x480; the bottom control panel stays 4:3 and centred (patch_table.h has
-// the sites). The plugin only patches bytes: every patch is checked against the bytes it expects first, and all of them go
+// At 16:9 800x600 becomes 1066x600 and 640x480 becomes 853x480, at 16:10 960x600 and 768x480 (the widths are chosen at
+// load from the screen the game is on, or the config's aspect); the bottom control panel stays 4:3 and centred
+// (patch_table.h has the sites). The compose pass fits the classic picture to the window height, so a picture wider than
+// the window would lose its sides, and with them the HUD in the top corners (merc and summon portraits, the clock). The plugin only patches bytes: every patch is checked against the bytes it expects first, and all of them go
 // in through one D2RLoader transaction, so on any other game image, or with bytes another plugin changed, nothing changes.
 // Mouse mapping, culling and the cursor read the screen-size globals and follow the new width by themselves. Two hooks move
 // the side panels to the window edges (ui_layout.h): the profile loader rewrites the panel anchors of _profileSD.json, and
@@ -38,7 +41,7 @@ constexpr D2RL::PluginInfo Info{
     .name = "Legacy 16:9",
     .version = PluginVersion,
     .author = "Nugwa628",
-    .description = "Legacy (classic) graphics in 16:9: 1066x600 and 853x480; the control panel stays 4:3.",
+    .description = "Legacy (classic) graphics as wide as the screen (16:9: 1066x600 and 853x480); the control panel stays 4:3.",
     .flags = D2RL::PluginFlags::Client | D2RL::PluginFlags::NativeHooks,
 };
 
@@ -48,6 +51,8 @@ volatile LONG g_resets = 0;
 char g_ui[160] = "panels: not moved";
 volatile LONG g_profilePatches = 0;  // anchors rewritten (both of them count 2)
 int g_catcherShift = 0;               // right click catcher x this plugin set last (UI thread)
+legacy169::Layout g_layout = legacy169::Layout169;
+legacy169::PatchTable g_table = legacy169::Patches;
 
 using ProfileLoadFn = void(__fastcall*)(const char* path, int id);
 using BordersDrawFn = void(__fastcall*)(uint8_t* panel, void* a2, void* a3, void* a4);
@@ -98,21 +103,56 @@ auto ReadConfigText(char* out, uint32_t size) -> bool {
 	return g_context->ReadConfig(out, size, &need);
 }
 
-#ifdef LEGACY169_TEST_BAD_BYTES
-// Test build only: the last patch expects one byte the game does not have, as on another build or next to a plugin that
-// patched the same site. The whole table must be refused and the game left unchanged.
-auto BadTable() -> const legacy169::Patch* {
-	static legacy169::Patch table[legacy169::PatchCount];
-	std::memcpy(table, legacy169::Patches, sizeof(table));
-	table[legacy169::PatchCount - 1].expected[0] ^= 0xff;
-	return table;
+// The screen the game is on: the monitor of this process's game window, else the primary monitor. Fullscreen, borderless
+// and a maximised window show the classic picture at (about) this shape; another window shape takes `aspect`.
+BOOL CALLBACK FindGameWindow(HWND h, LPARAM out) {
+	DWORD pid = 0;
+	GetWindowThreadProcessId(h, &pid);
+	if (pid == GetCurrentProcessId() && IsWindowVisible(h) && GetWindow(h, GW_OWNER) == nullptr) {
+		*reinterpret_cast<HWND*>(out) = h;
+		return FALSE;
+	}
+	return TRUE;
 }
-const legacy169::Patch* const Table = BadTable();
-#else
-const legacy169::Patch* const Table = legacy169::Patches;
+
+auto ScreenSize(int* w, int* h) -> const char* {
+	HWND game = nullptr;
+	EnumWindows(&FindGameWindow, reinterpret_cast<LPARAM>(&game));
+	const HMONITOR monitor = game != nullptr ? MonitorFromWindow(game, MONITOR_DEFAULTTOPRIMARY) : MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+	MONITORINFO info{};
+	info.cbSize = sizeof(info);
+	if (monitor == nullptr || !GetMonitorInfoW(monitor, &info)) {
+		*w = *h = 0;
+		return "no monitor";
+	}
+	*w = info.rcMonitor.right - info.rcMonitor.left;
+	*h = info.rcMonitor.bottom - info.rcMonitor.top;
+	return game != nullptr ? "the game window's monitor" : "the primary monitor";
+}
+
+// The widths for this start (config `aspect`, else the screen) and the table built for them.
+void ChooseLayout(const legacy169::Config& config) {
+	int num = config.aspectNum, den = config.aspectDen;
+	const char* from = "aspect in legacy169.toml";
+	if (num == 0 || den == 0) {
+		from = ScreenSize(&num, &den);
+	}
+	g_layout = legacy169::LayoutFor(num, den);
+	g_table = legacy169::BuildPatches(g_layout);
+#ifdef LEGACY169_TEST_BAD_BYTES
+	// Test build only: the last patch expects one byte the game does not have, as on another build or next to a plugin that
+	// patched the same site. The whole table must be refused and the game left unchanged.
+	g_table[legacy169::PatchCount - 1].expected[0] ^= 0xff;
 #endif
+	char line[256];
+	std::snprintf(line, sizeof(line), "legacy169: screen %d:%d (%s): classic %dx%d and %dx%d, view shift (x * %d + %d) >> %d, panel anchors %.4g / %.4g",
+	              num, den, from, g_layout.width1, legacy169::ClassicHeight1, g_layout.width0, legacy169::ClassicHeight0, g_layout.shiftMul,
+	              g_layout.shiftAdd, g_layout.shiftSar, g_layout.leftAnchor, g_layout.rightAnchor);
+	Log(line);
+}
 
 auto Apply() -> bool {
+	const legacy169::Patch* const Table = g_table.data();
 	char line[512];
 	const legacy169::CheckResult check = legacy169::CheckAll(&ReadImage, const_cast<D2RL::PluginContext*>(g_context), Table);
 	if (!check.ok) {
@@ -176,7 +216,7 @@ auto Apply() -> bool {
 auto PatchProfile(legacy169::AnchorResult* out) -> bool {
 	__try {
 		auto* maps = *reinterpret_cast<legacy169::ProfileMap* const*>(g_context->exeBase + legacy169::RvaProfileMaps);
-		*out = legacy169::PatchPanelAnchors(maps, legacy169::ProfileSd);
+		*out = legacy169::PatchPanelAnchors(maps, legacy169::ProfileSd, g_layout.leftAnchor, g_layout.rightAnchor);
 		return true;
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		return false;
@@ -193,7 +233,7 @@ void LogProfile(const char* when) {
 	}
 	InterlockedExchangeAdd(&g_profilePatches, r.changed);
 	if (r.changed + r.already == 2) {
-		std::snprintf(g_ui, sizeof(g_ui), "panels at the edges (anchor x %.4g / %.4g)", legacy169::LeftAnchorX, legacy169::RightAnchorX);
+		std::snprintf(g_ui, sizeof(g_ui), "panels at the edges (anchor x %.4g / %.4g)", g_layout.leftAnchor, g_layout.rightAnchor);
 	}
 	std::snprintf(line, sizeof(line), "legacy169: %s: panel anchors left %.4g, right %.4g; %d rewritten, %d already set", when, r.oldLeft,
 	              r.oldRight, r.changed, r.already);
@@ -335,14 +375,20 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 	}
 	char text[4096];
 	const legacy169::Config config = legacy169::ParseConfig(ReadConfigText(text, sizeof(text)) ? text : nullptr);
+	if (config.enabled) {
+		ChooseLayout(config);
+	}
 	if (!config.enabled) {
 		Log("legacy169: enabled = false in legacy169.toml; nothing patched");
 		std::snprintf(g_status, sizeof(g_status), "off (enabled = false)");
+	} else if (g_layout.width1 == 800) {
+		Log("legacy169: the screen is 4:3 or narrower; the stock classic screen fits it, nothing patched");
+		std::snprintf(g_status, sizeof(g_status), "off (4:3 screen)");
 	} else if (Apply()) {
 		const int w = Global(legacy169::RvaScreenSizeX), h = Global(legacy169::RvaScreenSizeY);
 		std::snprintf(g_status, sizeof(g_status), "on: %zu patches, %dx%d and %dx%d, compose aspect %d/%d", legacy169::PatchCount,
-		              legacy169::ClassicWidth1, legacy169::ClassicHeight1, legacy169::ClassicWidth0, legacy169::ClassicHeight0,
-		              legacy169::ClassicWidth1, legacy169::ClassicHeight1);
+		              g_layout.width1, legacy169::ClassicHeight1, g_layout.width0, legacy169::ClassicHeight0, g_layout.width1,
+		              legacy169::ClassicHeight1);
 		std::snprintf(line, sizeof(line), "legacy169: %s; classic screen at load %dx%d", g_status, w, h);
 		Log(line);
 		const D2RL::ThreadService* uiThreads = nullptr;
@@ -357,9 +403,9 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			}
 		}
 		// D2R set its classic screen up before plugins load (seen with D2RLoader 1.3.1: 800x600 at load, no thread service
-		// yet). The setters' code is patched now; the two width globals get the 16:9 width the setter would have written.
+		// yet). The setters' code is patched now; the two width globals get the wide width the setter would have written.
 		const int mode = reinterpret_cast<int(__fastcall*)()>(context->exeBase + legacy169::RvaGetResolutionMode)();
-		const int wide = legacy169::WidenedWidth(mode, w, h, Global(legacy169::RvaViewSizeX));
+		const int wide = legacy169::WidenedWidth(mode, w, h, Global(legacy169::RvaViewSizeX), g_layout);
 		if (wide != 0) {
 			*reinterpret_cast<volatile int*>(context->exeBase + legacy169::RvaScreenSizeX) = wide;
 			*reinterpret_cast<volatile int*>(context->exeBase + legacy169::RvaViewSizeX) = wide;

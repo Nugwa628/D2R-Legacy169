@@ -46,9 +46,9 @@ Image GoodImage() {
 	return img;
 }
 
-int CountWidth(uint32_t from, uint32_t to) {
+int CountWidth(uint32_t from, uint32_t to, const legacy169::PatchTable& table = legacy169::Patches) {
 	int n = 0;
-	for (const auto& p : legacy169::Patches) {
+	for (const auto& p : table) {
 		if (p.size == 4 && legacy169::Le32(p.expected) == from && legacy169::Le32(p.bytes) == to) {
 			++n;
 		}
@@ -74,9 +74,13 @@ bool LoadFile(const char* path, Image& img) {
 int main(int argc, char** argv) {
 	using namespace legacy169;
 
-	// --dump: every patch as "rva size expected bytes" (hex), for a disassembler.
+	// --dump [W:H]: every patch (of the 16:9 table, or that screen's) as "rva size expected bytes" (hex), for a disassembler.
 	if (argc > 1 && std::strcmp(argv[1], "--dump") == 0) {
-		for (const auto& p : Patches) {
+		int num = 16, den = 9;
+		if (argc > 2 && !ParseAspect(argv[2], std::strlen(argv[2]), &num, &den)) {
+			return 2;
+		}
+		for (const auto& p : BuildPatches(LayoutFor(num, den))) {
 			char e[160], b[160];
 			Hex(e, sizeof(e), p.expected, p.size);
 			Hex(b, sizeof(b), p.bytes, p.size);
@@ -96,7 +100,7 @@ int main(int argc, char** argv) {
 	}
 	Check(ClassicWidth1 * 9 <= ClassicHeight1 * 16 && (ClassicWidth1 + 1) * 9 > ClassicHeight1 * 16, "1066 = floor(600 * 16 / 9)");
 	Check(ClassicWidth0 * 9 <= ClassicHeight0 * 16 && (ClassicWidth0 + 1) * 9 > ClassicHeight0 * 16, "853 = floor(480 * 16 / 9)");
-	Check(AspectBits == 0x3fe369d0U, "compose aspect float is 1066/600 (0x3fe369d0)");
+	Check(AspectBits(Layout169) == 0x3fe369d0U, "compose aspect float is 1066/600 (0x3fe369d0)");
 
 	// The compose instruction: old disp32 reads 4/3 at 0x1d65290, new one the cave.
 	const Patch movss = ComposeMovss();
@@ -120,7 +124,8 @@ int main(int argc, char** argv) {
 		Check(cull.bytes[0] == 0x83 && cull.bytes[1] == 0xc1 && cull.bytes[2] == 40, "add ecx, 40");
 	}
 	// Panel view shift: the stock 4:3 values at the 16:9 widths.
-	Check(PanelViewShift(ClassicWidth1) == 800 / 4 && PanelViewShift(ClassicWidth0) == 640 / 4, "view shift 200 / 160 at 1066 / 853");
+	Check(Shift(Layout169, ClassicWidth1) == 800 / 4 && Shift(Layout169, ClassicWidth0) == 640 / 4, "view shift 200 / 160 at 1066 / 853");
+	Check(Layout169.width1 == ClassicWidth1 && Layout169.width0 == ClassicWidth0, "16:9 layout is 1066 / 853");
 
 	// Automap: the width function in padding and the two calls that go to it.
 	{
@@ -139,11 +144,12 @@ int main(int argc, char** argv) {
 			Check(site + 5 + static_cast<int32_t>(Le32(c.bytes + 1)) == RvaAutomapWidth, "new call goes to the automap width function");
 		}
 		// what the panel adds at 16:9: (4 * shift) / 4 = the stock shift
-		Check(PanelViewShift(ClassicWidth1) * 4 / 4 == 200 && PanelViewShift(ClassicWidth0) * 4 / 4 == 160, "automap screen point shift 200 / 160");
-		// 0xb9a40: w / 2 with a panel open is X - 3X / 8, halved: X / 2 - shift (within 1)
+		Check(fn.bytes[28] == 0x6b && fn.bytes[29] == 0xc0 && fn.bytes[30] == Layout169.shiftMul && fn.bytes[33] == Layout169.shiftAdd &&
+		          fn.bytes[36] == Layout169.shiftSar, "classic: imul / add / sar with the layout's constants");
+		// 0xb9a40: w / 2 with a panel open is X - 2 * shift, halved: X / 2 - shift (within 1)
 		for (int w : {ClassicWidth1, ClassicWidth0}) {
-			const int half = (w - (w * 3 >> 3)) / 2;
-			Check(half - (w / 2 - PanelViewShift(w)) >= -1 && half - (w / 2 - PanelViewShift(w)) <= 1, "automap centre: X / 2 - shift");
+			const int half = (w - TwiceShift(Layout169, w)) / 2;
+			Check(half - (w / 2 - Shift(Layout169, w)) >= -1 && half - (w / 2 - Shift(Layout169, w)) <= 1, "automap centre: X / 2 - shift");
 		}
 	}
 
@@ -154,6 +160,57 @@ int main(int argc, char** argv) {
 		Check(PanelX(RightAnchorX, ClassicWidth1, 0, t) == ClassicWidth1 - 400, "right panel at 666 in 1066 (frame to the edge)");
 		Check(PanelX(RightAnchorX, ClassicWidth0, 0, t) == ClassicWidth0 - 320, "right panel at 533 in 853 (to the edge)");
 		Check(PanelX(StockAnchorX, 800, -320, t) == 80 && PanelX(StockAnchorX, 800, 0, t) == 400, "stock 0.5 at 800 for reference");
+	}
+
+	// Layouts of other screens: 16:10 is 960x600 / 768x480; every screen from 4:3 to 16:9 gets a layout whose shift is the
+	// stock 200 / 160 at both widths and whose panels sit where they belong, a few pixels narrower at most.
+	{
+		const Layout l = LayoutFor(16, 10);
+		Check(l.width1 == 960 && l.width0 == 768, "16:10: 960 / 768");
+		Check(LayoutFor(1680, 1050).width1 == 960 && LayoutFor(2560, 1600).width1 == 960, "16:10 monitors in pixels");
+		Check(LayoutFor(21, 9).width1 == 1066 && LayoutFor(32, 9).width1 == 1066, "wider than 16:9: the 16:9 layout");
+		Check(LayoutFor(4, 3).width1 == 800 && LayoutFor(5, 4).width1 == 800 && LayoutFor(4, 3).width0 == 640, "4:3 or narrower: stock");
+		Check(LayoutFor(0, 0).width1 == 1066 && LayoutFor(3, 0).width1 == 1066, "no screen size: 16:9");
+		Check(AspectBits(l) == FloatBits(960.0f / 600.0f), "16:10 compose float 1.6");
+		const PatchTable t = BuildPatches(l);
+		Check(CountWidth(800, 960, t) == 10 && CountWidth(640, 768, t) == 9, "16:10: ten 960 and nine 768 immediates");
+		Check(NoOverlap(t.data(), t.size()), "16:10 table: no overlap");
+		for (size_t i = 0; i < PatchCount; ++i) {
+			Check(t[i].rva == Patches[i].rva && t[i].size == Patches[i].size && std::memcmp(t[i].expected, Patches[i].expected, t[i].size) == 0,
+			      "16:10 table: same sites and expected bytes as 16:9");
+		}
+		int bad = 0, narrowed = 0;
+		for (int den : {900, 1000, 1080, 1200}) {
+			for (int num = den * 4 / 3; num <= den * 16 / 9 + 1; ++num) {
+				const Layout x = LayoutFor(num, den);
+				int want = static_cast<int>(600LL * num / den);
+				want = want > ClassicWidth1 ? ClassicWidth1 : want < 800 ? 800 : want;
+				const bool ok = x.width1 <= want && x.width1 >= want - 4 && Shift(x, x.width1) == 200 && Shift(x, x.width0) == 160 &&
+				                TwiceShift(x, x.width1) - 400 <= 1 && 400 - TwiceShift(x, x.width1) <= 1 && TwiceShift(x, x.width0) - 320 <= 1 &&
+				                320 - TwiceShift(x, x.width0) <= 1 && x.shiftMul <= 127 && x.shiftAdd <= 127 && x.twiceMul <= 127 &&
+				                (x.width0 == x.width1 * 4 / 5 || x.width0 == (x.width1 * 4 + 4) / 5);
+				bool panels = true;
+				for (bool tr : {true, false}) {
+					panels = panels && PanelX(x.leftAnchor, x.width1, -320, tr) == 80 && PanelX(x.leftAnchor, x.width0, -320, tr) == 0 &&
+					         PanelX(x.rightAnchor, x.width1, 0, tr) == x.width1 - 400 && PanelX(x.rightAnchor, x.width0, 0, tr) == x.width0 - 320;
+				}
+				bad += !(ok && panels);
+				narrowed += x.width1 != want;
+			}
+		}
+		Check(bad == 0, "every screen from 4:3 to 16:9: exact shift, panels in place, at most 4 pixels narrower");
+		std::printf("layouts: %d of the swept screens a few pixels narrower than 600 * aspect\n", narrowed);
+		Check(WidenedWidth(1, 800, 600, 800, l) == 960 && WidenedWidth(0, 640, 480, 640, l) == 768, "16:10: set-up screen gets 960 / 768");
+		Check(WidenedWidth(1, 800, 600, 800, LayoutFor(4, 3)) == 0, "4:3 layout: nothing to widen");
+	}
+	{
+		int n = -1, d = -1;
+		Check(ParseAspect("auto", 4, &n, &d) && n == 0 && d == 0, "aspect auto");
+		Check(ParseAspect("16:10", 5, &n, &d) && n == 16 && d == 10, "aspect 16:10");
+		Check(ParseAspect("1920x1200", 9, &n, &d) && n == 1920 && d == 1200, "aspect 1920x1200");
+		Check(!ParseAspect("16:", 3, &n, &d) && !ParseAspect(":9", 2, &n, &d) && !ParseAspect("16:9:1", 6, &n, &d) && !ParseAspect("wide", 4, &n, &d) &&
+		          !ParseAspect("0:9", 3, &n, &d),
+		      "bad aspects refused");
 	}
 
 	// Profile map and rapidjson values (fake structures shaped like D2R's).
@@ -220,6 +277,10 @@ int main(int argc, char** argv) {
 		Check(r.changed == 1 && r.already == 1 && x == RightAnchorX, "second run: right rewritten, left already set");
 		r = PatchPanelAnchors(maps, ProfileSd);
 		Check(r.changed == 0 && r.already == 2, "third run changes nothing");
+		number(membersL + 16, 0.5);
+		r = PatchPanelAnchors(maps, ProfileSd, 0.4169, 0.5836);
+		std::memcpy(&x, membersL + 16, 8);
+		Check(r.changed == 1 && r.already == 0 && x == 0.4169, "a layout's own anchors (16:10)");
 
 		flags(right.value, 0);  // not an object any more
 		Check(PatchPanelAnchors(maps, ProfileSd).changed == 0 && JsonNumberMember(right.value, "x") == nullptr, "non-object value refused");
@@ -329,6 +390,13 @@ int main(int argc, char** argv) {
 		Check(bad.enabled && bad.resetScreen, "values other than true/false keep the defaults");
 		const Config later = ParseConfig("[legacy169]\nenabled = false\n[d2rl]\nenabled = true\n");
 		Check(!later.enabled, "a later table does not change legacy169's keys");
+		Check(d.aspectNum == 0 && d.aspectDen == 0, "aspect default auto");
+		const Config a = ParseConfig("[legacy169]\naspect = \"16:10\"  # monitor\n");
+		Check(a.aspectNum == 16 && a.aspectDen == 10, "aspect = \"16:10\" read");
+		const Config b = ParseConfig("[legacy169]\naspect = 1920x1200\n");
+		Check(b.aspectNum == 1920 && b.aspectDen == 1200, "aspect without quotes read");
+		const Config w = ParseConfig("[legacy169]\naspect = \"wide\"\n");
+		Check(w.aspectNum == 0 && w.aspectDen == 0, "a bad aspect keeps auto");
 	}
 
 	// Optional: the real image.
