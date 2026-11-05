@@ -96,7 +96,7 @@ pwsh tools/build.ps1 -Sdk <PluginSDK folder> [-Image <D2R image dump>]
 Output: `build\Release\legacy169.dll`. The script also runs the unit tests (`build\tests\Release\legacy169_tests.exe`);
 with `-Image` they check every expected byte range against a dump of the game image.
 
-Test builds (never ship them; their version reads `0.1.0-test`):
+Test builds (never ship them; their version reads `0.1.1-test`):
 
 - `-Test` (output `build-test\`): adds a background-input harness so scripted checks can drive the game while it is not
   the foreground window. It only runs when `legacy169-testharness.txt` sits next to the DLL.

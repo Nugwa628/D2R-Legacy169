@@ -29,9 +29,9 @@
 namespace {
 
 #if defined(LEGACY169_TEST_HARNESS) || defined(LEGACY169_TEST_BAD_BYTES)
-constexpr const char* PluginVersion = "0.1.0-test";  // test build: not for release
+constexpr const char* PluginVersion = "0.1.1-test";  // test build: not for release
 #else
-constexpr const char* PluginVersion = "0.1.0";
+constexpr const char* PluginVersion = "0.1.1";
 #endif
 
 constexpr D2RL::PluginInfo Info{
