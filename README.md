@@ -18,7 +18,7 @@ Side panels sit at the window edges (inventory; character and inventory):
 
 - 800x600 shows as 1066x600, 640x480 as 853x480 (16:9 at the same height). The width follows the screen: a 16:10
   screen gets 960x600 and 768x480, so nothing at the edges is cut off. Wider than 16:9 stays at 16:9 with side bars.
-- Needs Diablo II: Resurrected 3.3 (build 93847) under D2RLoader 1.3.1. On any other game version the plugin loads,
+- Needs Diablo II: Resurrected 3.3 or 3.4 (builds 93847 and 95032) under D2RLoader 1.3.1. On any other game version the plugin loads,
   logs why and changes nothing. Works without a mod and next to other plugins that do not patch the same bytes.
 - Offline / single player (D2RLoader).
 
@@ -53,7 +53,7 @@ its status; `legacy169 mode 0` / `legacy169 mode 1` switch the classic resolutio
 
 ## Known limits
 
-- Only Diablo II: Resurrected 3.3 build 93847 under D2RLoader 1.3.1. Any other version: the log says why and the game
+- Only Diablo II: Resurrected 3.3 (build 93847) and 3.4 (build 95032) under D2RLoader 1.3.1. Any other version: the log says why and the game
   is not changed. The same happens when another plugin already changed one of the patched bytes.
 - At most 16:9; a wider window keeps side bars. The width is chosen at game start: after moving the game to a monitor
   of another shape, restart it. D2R fits the picture to the window height, so an `aspect` wider than the window cuts

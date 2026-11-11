@@ -377,6 +377,9 @@ int main(int argc, char** argv) {
 	// Build check.
 	Check(BuildMatches(0x6ab3782cU, "93847") && BuildMatches(0x6ab3782cU, nullptr) && BuildMatches(0x6ab3782cU, ""), "build 93847 matches");
 	Check(!BuildMatches(0x6ab3782dU, "93847") && !BuildMatches(0x6ab3782cU, "94100") && !BuildMatches(0x6ab3782cU, "9384"), "other builds refused");
+	Check(BuildMatches(0x6ab3782cU, "95032"), "build 95032 (D2R 3.4 under D2RLoader 1.3.1, the same image) matches");
+	Check(!BuildMatches(0x6ad81202U, "95032") && !BuildMatches(0x6ab3782cU, "950320") && !BuildMatches(0x6ab3782cU, "9503"),
+	      "3.4 build name on another image, or another name, refused");
 
 	// Config.
 	{

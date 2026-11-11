@@ -370,7 +370,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 	context->LogWarn(harness);
 #endif
 	if (!legacy169::BuildMatches(stamp, context->buildName)) {
-		Fail("legacy169: needs Diablo II: Resurrected 3.3 (build 93847) under D2RLoader 1.3.1; this game is another version, nothing patched");
+		Fail("legacy169: needs Diablo II: Resurrected 3.3 or 3.4 under D2RLoader 1.3.1; this game is another version, nothing patched");
 		return true;
 	}
 	char text[4096];
