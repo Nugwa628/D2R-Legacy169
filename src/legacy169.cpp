@@ -360,17 +360,20 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 	g_context = context;
 	char line[320];
 	const uint32_t stamp = ImageStamp(context);
-	std::snprintf(line, sizeof(line), "legacy169 %s loaded (%s scope, mod %s, D2R %s, image 0x%08x)", PluginVersion,
+	std::snprintf(line, sizeof(line), "legacy169 %s loaded (%s scope, mod %s, D2R %s, build name %.40s, image 0x%08x)", PluginVersion,
 	              context->loadScope == D2RL::LoadScope::Mod ? "mod" : "global", context->activeMod ? context->activeMod : "-",
-	              context->buildVersion ? context->buildVersion : "?", stamp);
+	              context->buildVersion ? context->buildVersion : "?", context->buildName && context->buildName[0] ? context->buildName : "(none)",
+	              stamp);
 	Log(line);
 #ifdef LEGACY169_TEST_HARNESS
 	char harness[256];
 	InstallTestHarness(harness, sizeof(harness));
 	context->LogWarn(harness);
 #endif
-	if (!legacy169::BuildMatches(stamp, context->buildName)) {
-		Fail("legacy169: needs Diablo II: Resurrected 3.3 or 3.4 under D2RLoader 1.3.1; this game is another version, nothing patched");
+	if (!legacy169::ImageSupported(stamp)) {  // the version and build name above are information; only the image decides
+		std::snprintf(line, sizeof(line), "legacy169: this D2RLoader version is not supported yet (game image 0x%08x, the addresses are for "
+		              "image 0x%08x); nothing patched", stamp, legacy169::ExpectedImage);
+		Fail(line);
 		return true;
 	}
 	char text[4096];

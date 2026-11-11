@@ -24,7 +24,7 @@
 //     the stock 4:3 relation back: 0xb9a40 in place, and the two width calls of the panel go to a small function in int3
 //     padding that returns 4 * the stock shift in classic mode and the HD width as before.
 // The side panels themselves move through two hooks (ui_layout.h).
-// All RVAs are for D2R 3.3 build 93847 under D2RLoader 1.3.1 (image stamp 0x6ab3782c).
+// All RVAs are for the game image D2RLoader 1.3.1 runs (image stamp 0x6ab3782c).
 #pragma once
 
 #include <array>
@@ -35,11 +35,11 @@
 
 namespace legacy169 {
 
-// D2RLoader 1.3.1 carries the game program itself: the image is the same on a D2R 3.3 install (build name 93847) and on a
-// D2R 3.4 install (build name 95032); only the game data and the build name D2RLoader reports differ.
+// The plugin is never tied to a game build or version. D2RLoader 1.3.1 carries the game program itself: the image is the
+// same on a D2R 3.3 install and on a D2R 3.4 install; only the game data and the version and build name D2RLoader reports
+// differ, and those are logged, never compared. What decides is the running code: the image the addresses were taken from
+// (its time stamp), and for every patch and hook the bytes it expects (nothing is patched when one differs).
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the game image D2RLoader 1.3.1 runs
-constexpr const char* ExpectedBuild = "93847";   // D2RLoader's build name on D2R 3.3
-constexpr const char* ExpectedBuild34 = "95032"; // D2RLoader's build name on D2R 3.4 (the same image)
 
 constexpr int ClassicHeight1 = 600;
 constexpr int ClassicWidth1 = 1066;  // 16:9: 600 * 16 / 9 = 1066.7, rounded down
@@ -465,25 +465,10 @@ inline void Hex(char* out, size_t outSize, const uint8_t* bytes, size_t size) {
 	}
 }
 
-constexpr bool SameBuildName(const char* a, const char* b) {
-	for (; *a != '\0' && *b != '\0'; ++a, ++b) {
-		if (*a != *b) {
-			return false;
-		}
-	}
-	return *a == '\0' && *b == '\0';
-}
-
-// Build check as mxl2012-core does it: the image stamp must match; a build name, when D2RLoader gives one, must be one the
-// image is known to run on (D2R 3.3 or 3.4).
-constexpr bool BuildMatches(uint32_t imageStamp, const char* buildName) {
-	if (imageStamp != ExpectedImage) {
-		return false;
-	}
-	if (buildName == nullptr || buildName[0] == '\0') {
-		return true;
-	}
-	return SameBuildName(buildName, ExpectedBuild) || SameBuildName(buildName, ExpectedBuild34);
+// The gate for the addresses that are read or called without expected bytes of their own: the running image is the one
+// they were taken from. The game's version and build name are no input.
+constexpr bool ImageSupported(uint32_t imageStamp) {
+	return imageStamp == ExpectedImage;
 }
 
 // The config file is small: [legacy169] enabled = true|false, reset_screen = true|false, aspect = "auto"|"W:H". A key

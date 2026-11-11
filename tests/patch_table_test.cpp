@@ -374,12 +374,11 @@ int main(int argc, char** argv) {
 	Check(WidenedWidth(1, 1066, 600, 1066) == 0 && WidenedWidth(0, 800, 600, 800) == 0, "already wide or mode mismatch: left alone");
 	Check(WidenedWidth(1, 800, 600, 1024) == 0 && WidenedWidth(2, 800, 600, 800) == 0, "foreign values or unknown mode: left alone");
 
-	// Build check.
-	Check(BuildMatches(0x6ab3782cU, "93847") && BuildMatches(0x6ab3782cU, nullptr) && BuildMatches(0x6ab3782cU, ""), "build 93847 matches");
-	Check(!BuildMatches(0x6ab3782dU, "93847") && !BuildMatches(0x6ab3782cU, "94100") && !BuildMatches(0x6ab3782cU, "9384"), "other builds refused");
-	Check(BuildMatches(0x6ab3782cU, "95032"), "build 95032 (D2R 3.4 under D2RLoader 1.3.1, the same image) matches");
-	Check(!BuildMatches(0x6ad81202U, "95032") && !BuildMatches(0x6ab3782cU, "950320") && !BuildMatches(0x6ab3782cU, "9503"),
-	      "3.4 build name on another image, or another name, refused");
+	// Image check: the image decides alone. The game's version and build name are no input, so the image installs on
+	// D2R 3.3 (build name 93847), on 3.4 (95032) and with any other or no name.
+	static_assert(ImageSupported(ExpectedImage), "the image the addresses were taken from");
+	Check(ImageSupported(0x6ab3782cU), "the D2RLoader 1.3.1 image is supported");
+	Check(!ImageSupported(0x6ab3782dU) && !ImageSupported(0x6ad81202U) && !ImageSupported(0), "another image, or none: nothing patched");
 
 	// Config.
 	{
